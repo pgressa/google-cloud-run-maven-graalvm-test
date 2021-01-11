@@ -1,0 +1,61 @@
+name: Google Cloud Run GraalVM CE CD
+on: [push, pull_request]
+
+env:
+  GCLOUD_PROJECT_ID: ${{ secrets.GCLOUD_PROJECT_ID }}
+  GCLOUD_REGION: europe-west3
+  GCLOUD_GCR: eu.gcr.io
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/cache@v2
+        with:
+          path: |
+            ~/.m2
+          key: ${{ runner.os }}-maven-test-${{ hashFiles('**/pom.xml') }}
+          restore-keys: ${{ runner.os }}-maven-test-
+      - name: Setup GraalVM CE
+        uses: DeLaGuardo/setup-graalvm@3.1
+        with:
+          graalvm-version: 20.3.0.java11
+      - name: Install Native Image
+        run: gu install native-image
+      - name: Setup Google Cloud CLI
+        uses: google-github-actions/setup-gcloud@master
+        if: secrets.GCLOUD_SA_KEY && secrets.GCLOUD_PROJECT_ID
+        with:
+          version: '290.0.1'
+          service_account_key: ${{ secrets.GCLOUD_SA_KEY }}
+          project_id: ${{ secrets.GCLOUD_PROJECT_ID }}
+      - name: Build Docker Image
+        env:
+          GCLOUD_IMAGE_REPOSITORY: ${{ secrets.GCLOUD_IMAGE_REPOSITORY }}
+          TESTCONTAINERS_RYUK_DISABLED: true
+        run: |
+          echo "DOCKER_IMAGE=${DOCKER_IMAGE}" >> $GITHUB_ENV
+          export DOCKER_IMAGE=`echo "${GCLOUD_GCR}/${GCLOUD_PROJECT_ID}/${GCLOUD_IMAGE_REPOSITORY}/google-cloud-run-maven-graalvm-test" | sed -e 's#//#/#' -e 's#^/##'`
+                    ./mvnw package -Dpackaging=docker-native -Djib.docker.image=$DOCKER_IMAGE --no-transfer-progress
+
+      - name: Push Docker Image
+        if: secrets.GCLOUD_SA_KEY && secrets.GCLOUD_PROJECT_ID
+        env:
+          GCLOUD_IMAGE_REPOSITORY: ${{ secrets.GCLOUD_IMAGE_REPOSITORY }}
+          TESTCONTAINERS_RYUK_DISABLED: true
+        run: |
+          gcloud auth configure-docker
+          docker push
+      - name: Deploy Cloud Run
+        if: secrets.GCLOUD_SA_KEY && secrets.GCLOUD_PROJECT_ID
+        run: |
+          DOCKER_IMAGE_REPOSITORY=$(docker images --format "{{.Repository}}" | grep google-cloud-run-maven-graalvm-test)
+          DOCKER_IMAGE=$(docker images --format "{{.Repository}}:{{.Tag}}" "${DOCKER_IMAGE_REPOSITORY}" )
+
+          gcloud run deploy google-cloud-run-maven-graalvm-test --quiet \
+            --image "${DOCKER_IMAGE}" --project "${GCLOUD_PROJECT_ID}" \
+            --region "${GCLOUD_REGION}" --platform managed --allow-unauthenticated --format json
+          echo "Invoke endpoint:"
+          gcloud run services list --platform managed --format json | jq -r \
+            '.[] | select(.metadata.name == "google-cloud-run-maven-test") | .status.address.url'
