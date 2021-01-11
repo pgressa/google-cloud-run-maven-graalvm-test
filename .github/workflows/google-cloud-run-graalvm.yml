@@ -25,7 +25,7 @@ jobs:
         run: gu install native-image
       - name: Setup Google Cloud CLI
         uses: google-github-actions/setup-gcloud@master
-        if: ${{ secrets.GCLOUD_SA_KEY && secrets.GCLOUD_PROJECT_ID }}
+        if: ${{ secrets.GCLOUD_SA_KEY != 0 && secrets.GCLOUD_PROJECT_ID != 0 }}
         with:
           version: '290.0.1'
           service_account_key: ${{ secrets.GCLOUD_SA_KEY }}
@@ -40,15 +40,12 @@ jobs:
                     ./mvnw package -Dpackaging=docker-native -Djib.docker.image=$DOCKER_IMAGE --no-transfer-progress
 
       - name: Push Docker Image
-        if: ${{ secrets.GCLOUD_SA_KEY && secrets.GCLOUD_PROJECT_ID }}
-        env:
-          GCLOUD_IMAGE_REPOSITORY: ${{ secrets.GCLOUD_IMAGE_REPOSITORY }}
-          TESTCONTAINERS_RYUK_DISABLED: true
+        if: ${{ secrets.GCLOUD_SA_KEY != 0 && secrets.GCLOUD_PROJECT_ID != 0 }}
         run: |
           gcloud auth configure-docker
-          docker push
+          docker push $DOCKER_IMAGE
       - name: Deploy Cloud Run
-        if: ${{ secrets.GCLOUD_SA_KEY && secrets.GCLOUD_PROJECT_ID }}
+        if: ${{ secrets.GCLOUD_SA_KEY != 0 && secrets.GCLOUD_PROJECT_ID != 0 }}
         run: |
           DOCKER_IMAGE_REPOSITORY=$(docker images --format "{{.Repository}}" | grep google-cloud-run-maven-graalvm-test)
           DOCKER_IMAGE=$(docker images --format "{{.Repository}}:{{.Tag}}" "${DOCKER_IMAGE_REPOSITORY}" )
